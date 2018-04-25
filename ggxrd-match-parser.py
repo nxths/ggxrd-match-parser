@@ -10,14 +10,14 @@ from PIL import Image
 from moviepy.video.io.VideoFileClip import VideoFileClip
 
 
-# *** Change this to absolute path ***
-MASKS_DIRPATH = './masks'
-
-
+MASKS_DIRPATH = os.path.join(
+    os.path.dirname(__file__),
+    'masks',
+)
 RGB_DIFF_THRESHOLD = 75
-TIME_LIMIT_RGB_DIFF_THRESHOLD = 85
 CHAR_RGB_DIFF_THRESHOLD = 125
-SKIP_SECS = 10
+SKIP_SECS = 20
+SEEK_SECS = 0.5
 
 
 class Mask(object):
@@ -31,12 +31,21 @@ class Mask(object):
 
 VS_MASK = Mask('vs.png')
 
-PRESS_START_MASK = Mask('press-start-button.png')
-INSERT_COIN_MASK = Mask('insert-coin.png')
+DEMO_MASKS = [
+    Mask('press-start.png'),
+    Mask('insert-coins-center.png'),
+    Mask('insert-coins-bot-center.png'),
+    Mask('character-usage.png'),
+]
 
-TIME_LIMIT_MASKS = [
+TRAINING_MASKS = [
     Mask('time-limit-left.png'),
     Mask('time-limit-right.png'),
+]
+
+MOM_MODE_MASKS = [
+    Mask('mom-display-left.png'),
+    Mask('mom-display-right.png'),
 ]
 
 CHAR_MASKS = [
@@ -64,7 +73,7 @@ def compare_rgb(mask, vid_rgb):
 
 def format_timestamp(secs):
     return '[{}]'.format(
-        str(datetime.timedelta(seconds=sec)),
+        str(datetime.timedelta(seconds=int(sec))),
     )
 
 def remove_video_file(vid_filepath):
@@ -77,7 +86,7 @@ def remove_video_file(vid_filepath):
         print('error removing {}'.format(vid_filepath), e)
         sys.exit(1)
 
-def mask_filepaths_to_title(mask_filepath0, mask_filepath1):
+def char_mask_filepaths_to_title(mask_filepath0, mask_filepath1):
     if '-left.' in mask_filepath0:
         left_filepath = mask_filepath0
         right_filepath = mask_filepath1
@@ -91,13 +100,22 @@ def mask_filepaths_to_title(mask_filepath0, mask_filepath1):
         char_name(right_filepath),
     )
 
+def get_video_id(url):
+    for m in [
+        re.match(r'.+youtu\.be/(?P<id>[^?&#]+)', url),
+        re.match(r'.+/watch\?v=(?P<id>[^&#]+)', url),
+        re.match(r'.+/v/(?P<id>[^?&#]+)', url),
+    ]:
+        if m:
+            return m.group('id')
+    return ''
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description='Parse GGXRD youtube video for matches')
     parser.add_argument(
         'youtube_url',
         type=str,
-        help='youtube URL (e.g. https://www.youtube.com/watch?v=fOvG_TfnCVo)',
+        help='youtube video URL (e.g. https://www.youtube.com/watch?v=fOvG_TfnCVo)',
     )
     parser.add_argument(
         '-t',
@@ -105,7 +123,7 @@ if __name__ == '__main__':
         type=str,
         default='video.webm',
         help='filepath to save temp downloaded youtube video '\
-        '(e.g. /var/tmp/video)',
+        '(e.g. ./youtube-vid)',
     )
     parser.add_argument(
         '-o',
@@ -113,7 +131,7 @@ if __name__ == '__main__':
         type=str,
         default='matches.html',
         help='filepath to output parsed matches html file '\
-        '(e.g. matches.html)',
+        '(e.g. ./matches.html)',
     )
     parser.add_argument(
         '--already-downloaded',
@@ -126,6 +144,7 @@ if __name__ == '__main__':
         help='keep the temp downloaded youtube video file after parsing',
     )
     args = parser.parse_args()
+
 
     # Download youtube video
     ###########################################################################
@@ -146,72 +165,78 @@ if __name__ == '__main__':
     clip = VideoFileClip(args.tmp_filepath, audio=False)
     sec_matches = []
     match_titles = []
+    next_sec = 0
 
-    sec = 0
-    while sec < int(clip.duration) - SKIP_SECS:
-        clip_frame_rgb = clip.get_frame(sec).flatten()
+    for sec, clip_frame in clip.iter_frames(with_times=True):
+        if sec < next_sec:
+            continue
+
+        clip_frame_rgb = clip_frame.flatten()
+
+        if any(
+            compare_rgb(mask, clip_frame_rgb) < RGB_DIFF_THRESHOLD
+            for mask in DEMO_MASKS
+        ):
+            next_sec = sec + SKIP_SECS
+            continue
 
         if compare_rgb(VS_MASK, clip_frame_rgb) < RGB_DIFF_THRESHOLD:
-            next_clip_frame_rgb = clip.get_frame(sec + 1).flatten()
-
-            press_start_rgb_diff = compare_rgb(PRESS_START_MASK, next_clip_frame_rgb)
-            insert_coin_rgb_diff = compare_rgb(INSERT_COIN_MASK, next_clip_frame_rgb)
-            not_demo_mode = (
-                press_start_rgb_diff >= RGB_DIFF_THRESHOLD and
-                insert_coin_rgb_diff >= RGB_DIFF_THRESHOLD
+            training_mode = any(
+                compare_rgb(mask, clip_frame_rgb) < RGB_DIFF_THRESHOLD
+                for mask in TRAINING_MASKS
             )
 
-            not_training_mode = all(
-                compare_rgb(mask, clip_frame_rgb) >= TIME_LIMIT_RGB_DIFF_THRESHOLD
-                for mask in TIME_LIMIT_MASKS
+            mom_mode = any(
+                compare_rgb(mask, clip_frame_rgb) < RGB_DIFF_THRESHOLD
+                for mask in MOM_MODE_MASKS
             )
 
-            if not_demo_mode and not_training_mode:
-                # Figure out match characters
-                ###############################################################
-                clip_frame_rgb = clip.get_frame(sec).flatten()
-                mask_diffs = []
+            if training_mode or mom_mode:
+                next_sec = sec + SKIP_SECS
+                continue
 
-                for char_mask in CHAR_MASKS:
-                    diff = compare_rgb(char_mask, clip_frame_rgb)
-                    mask_diffs.append((diff, char_mask))
+            # Figure out match characters
+            ###############################################################
+            mask_diffs = []
 
-                sorted_mask_diffs = sorted(mask_diffs, key=lambda md: md[0])
+            for char_mask in CHAR_MASKS:
+                diff = compare_rgb(char_mask, clip_frame_rgb)
+                mask_diffs.append((diff, char_mask))
 
-                if (
-                    sorted_mask_diffs[0][0] < CHAR_RGB_DIFF_THRESHOLD and
-                    sorted_mask_diffs[1][0] < CHAR_RGB_DIFF_THRESHOLD
-                ):
-                    sec_matches.append(sec)
-                    match_titles.append(
-                        mask_filepaths_to_title(
-                            sorted_mask_diffs[0][1].filepath,
-                            sorted_mask_diffs[1][1].filepath,
-                        ),
-                    )
-                    print(format_timestamp(sec), match_titles[-1])
+            sorted_mask_diffs = sorted(mask_diffs, key=lambda md: md[0])
 
-            sec += SKIP_SECS
+            if (
+                sorted_mask_diffs[0][0] < CHAR_RGB_DIFF_THRESHOLD and
+                sorted_mask_diffs[1][0] < CHAR_RGB_DIFF_THRESHOLD
+            ):
+                sec_matches.append(int(sec))
+                match_titles.append(
+                    char_mask_filepaths_to_title(
+                        sorted_mask_diffs[0][1].filepath,
+                        sorted_mask_diffs[1][1].filepath,
+                    ),
+                )
+                print(format_timestamp(sec), match_titles[-1])
+
+            next_sec = sec + SKIP_SECS
         else:
-            sec += 1
+            next_sec = sec + SEEK_SECS
 
 
     # Write matches file
     ###########################################################################
-    video_id = subprocess.check_output(
-        'youtube-dl --get-id --no-warnings {}'.format(args.youtube_url),
-        shell=True,
-    ).decode('utf-8').rstrip()
-
     stripped_url = re.sub(r'\?t=\d+', '?', args.youtube_url)
     stripped_url = re.sub(r'&t=\d+', '', stripped_url)
+    stripped_url = re.sub(r'#t=\d+', '', stripped_url)
 
     with open(args.output_filepath, 'w') as f:
         f.write(
             '<iframe width="480" height="360" '
             'src="https://www.youtube.com/embed/{}" frameborder="0" '
             'allow="autoplay; encrypted-media" allowfullscreen>'
-            '</iframe><br>\n'.format(video_id),
+            '</iframe><br>\n'.format(
+                get_video_id(args.youtube_url),
+            ),
         )
 
         for sec, title in zip(sec_matches, match_titles):

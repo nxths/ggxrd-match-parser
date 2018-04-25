@@ -7,18 +7,21 @@ import urllib.request
 
 
 # *** Change below values before running ***
-MAX_VIDEOS = 15                                   # max number of videos to keep parsed matches
-RSS_URL = ''                                      # youtube RSS url, e.g. https://www.youtube.com/feeds/videos.xml?channel_id=UCDmFkuRZSbxyvqdK-cjMSog
-MATCH_PARSER_FILEPATH = './ggxrd-match-parser.py' # change this to absolute path
-TMP_VID_FILEPATH = './.youtube-vid'               # path for the temporarily downloaded youtube videos
-TMP_MATCHES_OUTPUT_FILEPATH = './.temp-matches'   # path for temporary matches html
-MATCHES_OUTPUT_FILEPATH = './matches.html'        # path for output matches html
-SEEN_LINKS_FILEPATH = './.seen-links'             # path for file to keep track of previously parsed videos
+MAX_VIDEOS = 15                                # max number of videos to keep parsed matches for
+RSS_URL = ''                                   # youtube RSS url, e.g. https://www.youtube.com/feeds/videos.xml?channel_id=UCDmFkuRZSbxyvqdK-cjMSog
+TMP_VID_FILEPATH = './youtube-vid'             # path for the temporarily downloaded youtube videos
+TMP_MATCHES_OUTPUT_FILEPATH = './tmp-matches'  # path for temporary matches html
+MATCHES_OUTPUT_FILEPATH = 'matches.html'       # path for output matches html
+SEEN_LINKS_FILEPATH = './.seen-links'          # path for file to keep track of previously parsed videos
 
 
-PUBLISHED_RE = re.compile('<published>(?P<published>.+)</published>')
-LINK_RE = re.compile('<link .+?href="(?P<href>.+?)"')
+PUBLISHED_RE = re.compile(b'<published>(?P<published>.+)</published>')
+LINK_RE = re.compile(b'<link .*?href="(?P<href>.+?)"')
 MATCHES_SEP = '<br><hr><br>'
+MATCH_PARSER_FILEPATH = os.path.join(
+    os.path.dirname(__file__),
+    'ggxrd-match-parser.py',
+)
 
 
 def print_exit(s):
@@ -27,30 +30,30 @@ def print_exit(s):
 
 def item_published(item):
     m = PUBLISHED_RE.search(item)
-    return m.group('published') if m else ''
+    return m.group('published').decode('utf-8') if m else ''
 
 def item_link(item):
     m = LINK_RE.search(item)
-    return m.group('href') if m else ''
+    return m.group('href').decode('utf-8') if m else ''
 
 if __name__ == '__main__':
     if not RSS_URL:
         print_exit('Need to edit RSS_URL value, see comment towards top of this source file')
 
     try:
-        rss = urllib.request.urlopen(RSS_URL).read().decode('utf-8')
+        rss = urllib.request.urlopen(RSS_URL).read()
     except Exception as e:
         print_exit(e)
 
     items = []
-    item_start = rss.find('<entry>')
+    item_start = rss.find(b'<entry>')
     item_end = -1
 
     while item_start != -1 and len(items) < MAX_VIDEOS:
-        item_end = rss.find('</entry>', item_start)
-        item = rss[item_start:(item_end + len('</entry>'))]
+        item_end = rss.find(b'</entry>', item_start)
+        item = rss[item_start:(item_end + len(b'</entry>'))]
         items.append(item)
-        item_start = rss.find('<entry>', item_end)
+        item_start = rss.find(b'<entry>', item_end)
 
     try:
         with open(SEEN_LINKS_FILEPATH, 'r') as f:
@@ -66,7 +69,7 @@ if __name__ == '__main__':
             continue
 
         subprocess.check_call(
-            '"{}" -t "{}" -o "{}" "{}"'.format(
+            '{} -t "{}" -o "{}" "{}"'.format(
                 MATCH_PARSER_FILEPATH,
                 TMP_VID_FILEPATH,
                 TMP_MATCHES_OUTPUT_FILEPATH,
