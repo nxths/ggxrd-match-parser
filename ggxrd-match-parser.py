@@ -14,6 +14,7 @@ MASKS_DIRPATH = os.path.join(
     os.path.dirname(__file__),
     'masks',
 )
+TARGET_RESOLUTION = (144, 256)
 RGB_DIFF_THRESHOLD = 75
 CHAR_RGB_DIFF_THRESHOLD = 125
 SKIP_SECS = 20
@@ -162,7 +163,12 @@ if __name__ == '__main__':
 
     # Find match start timestamps
     ###########################################################################
-    clip = VideoFileClip(args.tmp_filepath, audio=False)
+    clip = VideoFileClip(
+        args.tmp_filepath,
+        audio=False,
+        target_resolution=TARGET_RESOLUTION,
+        resize_algorithm='fast_bilinear',
+    )
     sec_matches = []
     match_titles = []
     next_sec = 0
