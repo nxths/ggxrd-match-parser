@@ -19,6 +19,7 @@ The scripts should be cross platform but have only been tested on linux and wind
 The image analysis is comically simple so there's a number of limitations:
 * Videos must be raw gameplay footage, any picture-in-picture which shifts/resizes the game screen will break the image analysis. Netplay footage is also problematic because the connection bars display obscures the character name in the top left. Stream overlays should be ok if they don't obscure the top or center of the screen.
 * Live streaming videos are unsupported.
+* Youtube seems to continue processing videos after their initial upload, if the processed match timestamps appear both consistently and incorrectly offset this is probably why.  The ``ggxrd-rss-match-parser.py`` script will ignore videos uploaded within 24hrs for this reason.
 
 # Notes
 * An ``ERROR: requested format not available`` message is typically caused by trying to download a live streaming video. These can show up in youtube RSS feeds as the most recent video, should be ok to ignore when running ``ggxrd-rss-match-parser.py`` since older videos are processed first and there won't be any newer videos.

@@ -1,4 +1,5 @@
 #!/usr/bin/env python
+import datetime
 import os
 import re
 import subprocess
@@ -36,6 +37,13 @@ def item_link(item):
     m = LINK_RE.search(item)
     return m.group('href').decode('utf-8') if m else ''
 
+def published_timedelta(published):
+    d = datetime.datetime.strptime(
+        published.replace('+00:00', ''),
+        '%Y-%m-%dT%H:%M:%S',
+    )
+    return datetime.datetime.now() - d
+
 if __name__ == '__main__':
     if not RSS_URL:
         print_exit('Need to edit RSS_URL value, see comment towards top of this source file')
@@ -66,6 +74,12 @@ if __name__ == '__main__':
         link = item_link(item)
 
         if not published or not link or link in seen_links:
+            continue
+        elif published_timedelta(published).days == 0:
+            print(
+                'Ignoring {}, video uploaded within 24hrs may not be fully '
+                'processed on youtube yet'.format(link),
+            )
             continue
 
         subprocess.check_call(
