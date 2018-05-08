@@ -42,7 +42,7 @@ def published_timedelta(published):
         published.replace('+00:00', ''),
         '%Y-%m-%dT%H:%M:%S',
     )
-    return datetime.datetime.now() - d
+    return datetime.datetime.utcnow() - d
 
 if __name__ == '__main__':
     if not RSS_URL:
