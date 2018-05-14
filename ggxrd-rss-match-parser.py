@@ -75,7 +75,7 @@ if __name__ == '__main__':
 
         if not published or not link or link in seen_links:
             continue
-        elif published_timedelta(published).days == 0:
+        elif published_timedelta(published).days <= 0:
             print(
                 'Ignoring {}, video uploaded within 24hrs may not be fully '
                 'processed on youtube yet'.format(link),
