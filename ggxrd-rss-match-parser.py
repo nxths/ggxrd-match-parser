@@ -23,6 +23,7 @@ MATCH_PARSER_FILEPATH = os.path.join(
     os.path.dirname(__file__),
     'ggxrd-match-parser.py',
 )
+IGNORE_TIMEDELTA = datetime.timedelta(1, hours=12)
 
 
 def print_exit(s):
@@ -75,9 +76,9 @@ if __name__ == '__main__':
 
         if not published or not link or link in seen_links:
             continue
-        elif published_timedelta(published).days <= 0:
+        elif published_timedelta(published) <= IGNORE_TIMEDELTA:
             print(
-                'Ignoring {}, video uploaded within 24hrs may not be fully '
+                'Ignoring {}, video uploaded within 36hrs may not be fully '
                 'processed on youtube yet'.format(link),
             )
             continue
