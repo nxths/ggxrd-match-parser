@@ -22,7 +22,7 @@ The image analysis is comically simple so there's a number of limitations:
 * Youtube seems to continue processing videos after their initial upload, if the processed match timestamps appear both consistently and incorrectly offset this is probably why.  The ``ggxrd-rss-match-parser.py`` script will ignore videos uploaded within 36hrs for this reason.
 
 # Notes
-* An ``ERROR: requested format not available`` message is typically caused by trying to download a live streaming video. These can show up in youtube RSS feeds as the most recent video, should be ok to ignore when running ``ggxrd-rss-match-parser.py`` since older videos are processed first and there won't be any newer videos.
+* An ``ERROR: requested format not available`` message is typically caused by trying to download a live streaming video.
 * If the scripts appear to be hung after downloading a youtube video, it's likely waiting on moviepy to finish its initial processing. Check to see if ffmpeg is consuming a lot of CPU - this indicates it's doing work. It can take a long time for lengthy videos, may need to let it run for a while.
 
 # Further work (none of these are planned, but would be nice)
