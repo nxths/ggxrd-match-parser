@@ -7,6 +7,7 @@ import subprocess
 import sys
 
 from PIL import Image
+from moviepy.audio.io.AudioFileClip import AudioFileClip
 from moviepy.video.io.VideoFileClip import VideoFileClip
 
 
@@ -14,11 +15,13 @@ MASKS_DIRPATH = os.path.join(
     os.path.dirname(__file__),
     'masks',
 )
+AUDIO_FILEPATH_SUFFIX = '.audio'
 TARGET_RESOLUTION = (144, 256)
 RGB_DIFF_THRESHOLD = 75
 CHAR_RGB_DIFF_THRESHOLD = 125
 SKIP_SECS = 5
 SEEK_SECS = 0.5
+VS_AUDIO_FRAME_THRESHOLD = 0.001
 
 
 class Mask(object):
@@ -31,13 +34,6 @@ class Mask(object):
         )
 
 VS_MASK = Mask('vs.png')
-
-DEMO_MASKS = [
-    Mask('press-start.png'),
-    Mask('insert-coins-center.png'),
-    Mask('insert-coins-bot-center.png'),
-    Mask('character-usage.png'),
-]
 
 TRAINING_MASKS = [
     Mask('time-limit-left.png'),
@@ -77,14 +73,14 @@ def format_timestamp(secs):
         str(datetime.timedelta(seconds=int(sec))),
     )
 
-def remove_video_file(vid_filepath):
-    if not os.path.exists(vid_filepath):
+def remove_audiovideo_file(audiovid_filepath):
+    if not os.path.exists(audiovid_filepath):
         return
 
     try:
-        os.remove(vid_filepath)
+        os.remove(audiovid_filepath)
     except Exception as e:
-        print('error removing {}'.format(vid_filepath), e)
+        print('error removing {}'.format(audiovid_filepath), e)
         sys.exit(1)
 
 def char_mask_filepaths_to_title(mask_filepath0, mask_filepath1):
@@ -150,11 +146,25 @@ if __name__ == '__main__':
     # Download youtube video
     ###########################################################################
     if not args.already_downloaded:
-        remove_video_file(args.tmp_filepath)
+        remove_audiovideo_file(args.tmp_filepath)
         subprocess.check_call(
             'youtube-dl --format worstvideo --no-continue --output {} '
             '"{}"'.format(
                 args.tmp_filepath,
+                args.youtube_url,
+            ),
+            shell=True,
+        )
+
+    # Download youtube audio
+    ###########################################################################
+    if not args.already_downloaded:
+        audio_filepath = args.tmp_filepath + AUDIO_FILEPATH_SUFFIX
+        remove_audiovideo_file(audio_filepath)
+        subprocess.check_call(
+            'youtube-dl --format worstaudio --no-continue --output {} '
+            '"{}"'.format(
+                audio_filepath,
                 args.youtube_url,
             ),
             shell=True,
@@ -169,64 +179,65 @@ if __name__ == '__main__':
         target_resolution=TARGET_RESOLUTION,
         resize_algorithm='fast_bilinear',
     )
+
     sec_matches = []
     match_titles = []
     next_sec = 0
 
-    for sec, clip_frame in clip.iter_frames(with_times=True):
-        if sec < next_sec:
-            continue
-
-        clip_frame_rgb = clip_frame.flatten()
-
-        if any(
-            compare_rgb(mask, clip_frame_rgb) < RGB_DIFF_THRESHOLD
-            for mask in DEMO_MASKS
-        ):
-            next_sec = sec + SKIP_SECS
-            continue
-
-        if compare_rgb(VS_MASK, clip_frame_rgb) < RGB_DIFF_THRESHOLD:
-            training_mode = any(
-                compare_rgb(mask, clip_frame_rgb) < RGB_DIFF_THRESHOLD
-                for mask in TRAINING_MASKS
-            )
-
-            mom_mode = any(
-                compare_rgb(mask, clip_frame_rgb) < RGB_DIFF_THRESHOLD
-                for mask in MOM_MODE_MASKS
-            )
-
-            if training_mode or mom_mode:
-                next_sec = sec + SKIP_SECS
+    with AudioFileClip(args.tmp_filepath + AUDIO_FILEPATH_SUFFIX) as audio_clip:
+        for sec, clip_frame in clip.iter_frames(with_times=True):
+            if sec < next_sec:
                 continue
 
-            # Figure out match characters
-            ###############################################################
-            mask_diffs = []
+            clip_frame_rgb = clip_frame.flatten()
 
-            for char_mask in CHAR_MASKS:
-                diff = compare_rgb(char_mask, clip_frame_rgb)
-                mask_diffs.append((diff, char_mask))
-
-            sorted_mask_diffs = sorted(mask_diffs, key=lambda md: md[0])
-
-            if (
-                sorted_mask_diffs[0][0] < CHAR_RGB_DIFF_THRESHOLD and
-                sorted_mask_diffs[1][0] < CHAR_RGB_DIFF_THRESHOLD
-            ):
-                sec_matches.append(int(sec))
-                match_titles.append(
-                    char_mask_filepaths_to_title(
-                        sorted_mask_diffs[0][1].filepath,
-                        sorted_mask_diffs[1][1].filepath,
-                    ),
+            if compare_rgb(VS_MASK, clip_frame_rgb) < RGB_DIFF_THRESHOLD:
+                is_demo_mode = all(
+                    abs(x) < VS_AUDIO_FRAME_THRESHOLD
+                    for x in audio_clip.get_frame(sec)
                 )
-                print(format_timestamp(sec), match_titles[-1])
 
-            next_sec = sec + SKIP_SECS
-        else:
-            next_sec = sec + SEEK_SECS
+                is_training_mode = any(
+                    compare_rgb(mask, clip_frame_rgb) < RGB_DIFF_THRESHOLD
+                    for mask in TRAINING_MASKS
+                )
+
+                is_mom_mode = any(
+                    compare_rgb(mask, clip_frame_rgb) < RGB_DIFF_THRESHOLD
+                    for mask in MOM_MODE_MASKS
+                )
+
+                if is_demo_mode or is_training_mode or is_mom_mode:
+                    next_sec = sec + SKIP_SECS
+                    continue
+
+                # Figure out match characters
+                ###############################################################
+                mask_diffs = []
+
+                for char_mask in CHAR_MASKS:
+                    diff = compare_rgb(char_mask, clip_frame_rgb)
+                    mask_diffs.append((diff, char_mask))
+
+                sorted_mask_diffs = sorted(mask_diffs, key=lambda md: md[0])
+
+                if (
+                    sorted_mask_diffs[0][0] < CHAR_RGB_DIFF_THRESHOLD and
+                    sorted_mask_diffs[1][0] < CHAR_RGB_DIFF_THRESHOLD
+                ):
+                    sec_matches.append(int(sec))
+                    match_titles.append(
+                        char_mask_filepaths_to_title(
+                            sorted_mask_diffs[0][1].filepath,
+                            sorted_mask_diffs[1][1].filepath,
+                        ),
+                    )
+                    print(format_timestamp(sec), match_titles[-1])
+
+                next_sec = sec + SKIP_SECS
+            else:
+                next_sec = sec + SEEK_SECS
+    clip.reader.close()
 
 
     # Write matches file
@@ -257,4 +268,5 @@ if __name__ == '__main__':
         f.write('<br><hr><br>\n')
 
     if not args.keep_tmp_video and not args.already_downloaded:
-        remove_video_file(args.tmp_filepath)
+        remove_audiovideo_file(args.tmp_filepath)
+        remove_audiovideo_file(args.tmp_filepath + AUDIO_FILEPATH_SUFFIX)
