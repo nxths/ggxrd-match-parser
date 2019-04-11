@@ -1,6 +1,8 @@
 #!/usr/bin/env python
 import argparse
 import datetime
+import itertools
+import json
 import os
 import re
 import subprocess
@@ -11,29 +13,40 @@ from moviepy.audio.io.AudioFileClip import AudioFileClip
 from moviepy.video.io.VideoFileClip import VideoFileClip
 
 
-MASKS_DIRPATH = os.path.join(
+DATA_DIRPATH = os.path.join(
     os.path.dirname(__file__),
-    'masks',
+    'data',
 )
 AUDIO_FILEPATH_SUFFIX = '.audio'
 TARGET_RESOLUTION = (144, 256)
-RGB_DIFF_THRESHOLD = 75
-CHAR_RGB_DIFF_THRESHOLD = 125
+MASK_RGB_DIFF_THRESHOLD = 75
 SKIP_SECS = 5
 SEEK_SECS = 0.5
 VS_AUDIO_FRAME_THRESHOLD = 0.001
+HISTOGRAM_DIFF_THRESHOLD = 0.7
+CHAR_HISTOGRAM_DIFF_DELTA_THRESHOLD = 0.03
 
+VS_BW_IMG = Image.open(
+    '{}/vs-bw.png'.format(DATA_DIRPATH),
+).convert('1')
+VS_HISTOGRAM = Image.open(
+    '{}/vs.png'.format(DATA_DIRPATH),
+).convert('RGB').histogram(mask=VS_BW_IMG)
+CHAR_LEFT_BW_IMG = Image.open(
+    '{}/char-left-bw.png'.format(DATA_DIRPATH),
+).convert('1')
+CHAR_RIGHT_BW_IMG = Image.open(
+    '{}/char-right-bw.png'.format(DATA_DIRPATH),
+).convert('1')
 
 class Mask(object):
     def __init__(self, filepath):
         self.filepath = filepath
         self.img_data = list(
             Image.open(
-                '{}/{}'.format(MASKS_DIRPATH, filepath),
-            ).getdata(),
+                '{}/masks/{}'.format(DATA_DIRPATH, filepath),
+            ).convert('RGB').getdata(),
         )
-
-VS_MASK = Mask('vs.png')
 
 TRAINING_MASKS = [
     Mask('time-limit-left.png'),
@@ -45,16 +58,38 @@ MOM_MODE_MASKS = [
     Mask('mom-display-right.png'),
 ]
 
-CHAR_MASKS = [
-    Mask('chars/{}'.format(filepath))
-    for filepath in os.listdir('{}/chars'.format(MASKS_DIRPATH))
-]
+CHAR_LEFT_HISTOGRAMS = {}
+CHAR_RIGHT_HISTOGRAMS = {}
+CHAR_LEFT_IMAGES = {}
+CHAR_RIGHT_IMAGES = {}
+for filepath in os.listdir('{}/chars'.format(DATA_DIRPATH)):
+    char_name = os.path.splitext(filepath)[0]
+    if filepath.endswith('.json'):
+        with open('{}/chars/{}'.format(DATA_DIRPATH, filepath), 'r') as f:
+            histogram = json.load(f)
+            if char_name.endswith('-left'):
+                CHAR_LEFT_HISTOGRAMS[char_name] = histogram
+            else:
+                CHAR_RIGHT_HISTOGRAMS[char_name] = histogram
+    elif filepath.endswith('.png'):
+        img = Image.open('{}/chars/{}'.format(DATA_DIRPATH, filepath))
+        if char_name.endswith('-left'):
+            CHAR_LEFT_IMAGES[char_name] = img
+        else:
+            CHAR_RIGHT_IMAGES[char_name] = img#"""
 
-def compare_rgb(mask, vid_rgb):
+
+def flatten(xs):
+    return list(itertools.chain(*xs))
+
+def histogram_diff(hist1, hist2):
+    return sum(min(v1, v2) for v1, v2 in zip(hist1, hist2)) / sum(hist2)
+
+def compare_rgb(mask_rgb, vid_rgb):
     total_rgb_diff = 0
     count = 0
 
-    for i, (img_r, img_g, img_b, _) in enumerate(mask.img_data):
+    for i, (img_r, img_g, img_b) in enumerate(mask_rgb):
         if img_r == 255 and img_g == 255 and img_b == 255:
             continue
 
@@ -83,13 +118,9 @@ def remove_audiovideo_file(audiovid_filepath):
         print('error removing {}'.format(audiovid_filepath), e)
         sys.exit(1)
 
-def char_mask_filepaths_to_title(mask_filepath0, mask_filepath1):
-    if '-left.' in mask_filepath0:
-        left_filepath = mask_filepath0
-        right_filepath = mask_filepath1
-    else:
-        left_filepath = mask_filepath1
-        right_filepath = mask_filepath0
+def format_title(char_left, char_right):
+    left_filepath = char_left
+    right_filepath = char_right
 
     char_name = lambda s: os.path.basename(s).split('-')[0]
     return '{} vs {}'.format(
@@ -106,6 +137,7 @@ def get_video_id(url):
         if m:
             return m.group('id')
     return ''
+
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description='Parse GGXRD youtube video for matches')
@@ -189,21 +221,23 @@ if __name__ == '__main__':
             if sec < next_sec:
                 continue
 
-            clip_frame_rgb = clip_frame.flatten()
+            clip_frame_img = Image.fromarray(clip_frame.astype('uint8'), 'RGB')
+            clip_frame_vs_histogram = clip_frame_img.histogram(mask=VS_BW_IMG)
 
-            if compare_rgb(VS_MASK, clip_frame_rgb) < RGB_DIFF_THRESHOLD:
+            if histogram_diff(clip_frame_vs_histogram, VS_HISTOGRAM) >= HISTOGRAM_DIFF_THRESHOLD:
                 is_demo_mode = all(
                     abs(x) < VS_AUDIO_FRAME_THRESHOLD
                     for x in audio_clip.get_frame(sec)
                 )
 
+                clip_frame_rgb = clip_frame.flatten()
                 is_training_mode = any(
-                    compare_rgb(mask, clip_frame_rgb) < RGB_DIFF_THRESHOLD
+                    compare_rgb(mask.img_data, clip_frame_rgb) < MASK_RGB_DIFF_THRESHOLD
                     for mask in TRAINING_MASKS
                 )
 
                 is_mom_mode = any(
-                    compare_rgb(mask, clip_frame_rgb) < RGB_DIFF_THRESHOLD
+                    compare_rgb(mask.img_data, clip_frame_rgb) < MASK_RGB_DIFF_THRESHOLD
                     for mask in MOM_MODE_MASKS
                 )
 
@@ -213,26 +247,55 @@ if __name__ == '__main__':
 
                 # Figure out match characters
                 ###############################################################
-                mask_diffs = []
+                char_left_histogram = clip_frame_img.histogram(mask=CHAR_LEFT_BW_IMG)
+                char_right_histogram = clip_frame_img.histogram(mask=CHAR_RIGHT_BW_IMG)
 
-                for char_mask in CHAR_MASKS:
-                    diff = compare_rgb(char_mask, clip_frame_rgb)
-                    mask_diffs.append((diff, char_mask))
+                char_left_histogram_diffs = [
+                    (histogram_diff(char_left_histogram, histogram), char_name)
+                    for char_name, histogram in CHAR_LEFT_HISTOGRAMS.items()
+                ]
+                char_right_histogram_diffs = [
+                    (histogram_diff(char_right_histogram, histogram), char_name)
+                    for char_name, histogram in CHAR_RIGHT_HISTOGRAMS.items()
+                ]
 
-                sorted_mask_diffs = sorted(mask_diffs, key=lambda md: md[0])
+                sorted_left_histogram_diffs = sorted(char_left_histogram_diffs, key=lambda hd: hd[0], reverse=True)
+                sorted_right_histogram_diffs = sorted(char_right_histogram_diffs, key=lambda hd: hd[0], reverse=True)
 
-                if (
-                    sorted_mask_diffs[0][0] < CHAR_RGB_DIFF_THRESHOLD and
-                    sorted_mask_diffs[1][0] < CHAR_RGB_DIFF_THRESHOLD
-                ):
-                    sec_matches.append(int(sec))
-                    match_titles.append(
-                        char_mask_filepaths_to_title(
-                            sorted_mask_diffs[0][1].filepath,
-                            sorted_mask_diffs[1][1].filepath,
-                        ),
-                    )
-                    print(format_timestamp(sec), match_titles[-1])
+                if sorted_left_histogram_diffs[0][0] < HISTOGRAM_DIFF_THRESHOLD or sorted_right_histogram_diffs[0][0] < HISTOGRAM_DIFF_THRESHOLD:
+                    continue
+
+                def rgb_fallback_char_match(char_side_bw_img, char_side_images):
+                    side_img = char_side_bw_img.convert('RGB')
+                    side_img.paste(clip_frame_img, mask=char_side_bw_img)
+                    rgb_diffs = [
+                        (
+                            compare_rgb(
+                                list(side_img.getdata()),
+                                flatten(list(char_img.getdata())),
+                            ),
+                            char_name,
+                        )
+                        for char_name, char_img
+                        in char_side_images.items()
+                    ]
+                    sorted_rgb_diffs = sorted(rgb_diffs, key=lambda h: h[0])
+                    return sorted_rgb_diffs[0][1]
+
+                left_char = sorted_left_histogram_diffs[0][1]
+                right_char = sorted_right_histogram_diffs[0][1]
+                left_hist_diff_delta = sorted_left_histogram_diffs[0][0] - sorted_left_histogram_diffs[1][0]
+                right_hist_diff_delta = sorted_right_histogram_diffs[0][0] - sorted_right_histogram_diffs[1][0]
+
+                if left_hist_diff_delta <= CHAR_HISTOGRAM_DIFF_DELTA_THRESHOLD:
+                    left_char = rgb_fallback_char_match(CHAR_LEFT_BW_IMG, CHAR_LEFT_IMAGES)
+                if right_hist_diff_delta <= CHAR_HISTOGRAM_DIFF_DELTA_THRESHOLD:
+                    right_char = rgb_fallback_char_match(CHAR_RIGHT_BW_IMG, CHAR_RIGHT_IMAGES)
+
+                sec_matches.append(int(sec))
+                title = format_title(left_char, right_char)
+                match_titles.append(title)
+                print(format_timestamp(sec), title)
 
                 next_sec = sec + SKIP_SECS
             else:
