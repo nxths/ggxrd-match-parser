@@ -76,7 +76,7 @@ for filepath in os.listdir('{}/chars'.format(DATA_DIRPATH)):
         if char_name.endswith('-left'):
             CHAR_LEFT_IMAGES[char_name] = img
         else:
-            CHAR_RIGHT_IMAGES[char_name] = img#"""
+            CHAR_RIGHT_IMAGES[char_name] = img
 
 
 def flatten(xs):
@@ -279,7 +279,7 @@ if __name__ == '__main__':
                         for char_name, char_img
                         in char_side_images.items()
                     ]
-                    sorted_rgb_diffs = sorted(rgb_diffs, key=lambda h: h[0])
+                    sorted_rgb_diffs = sorted(rgb_diffs, key=lambda rd: rd[0])
                     return sorted_rgb_diffs[0][1]
 
                 left_char = sorted_left_histogram_diffs[0][1]
