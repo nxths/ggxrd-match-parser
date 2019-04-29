@@ -1,131 +1,133 @@
-#!/usr/bin/env python
+#!/usr/bin/env python3
 import argparse
+import collections
 import datetime
 import itertools
-import json
 import os
 import re
 import subprocess
 import sys
 
 from PIL import Image
-from moviepy.audio.io.AudioFileClip import AudioFileClip
+from PIL import ImageChops
+from PIL import ImageStat
 from moviepy.video.io.VideoFileClip import VideoFileClip
+import imagehash
 
 
+PRINT_REJECTED_MATCHES = True
 DATA_DIRPATH = os.path.join(
     os.path.dirname(__file__),
     'data',
 )
-AUDIO_FILEPATH_SUFFIX = '.audio'
+CLIP_FRAME_BUFFER_MAX_SECS = 8
 TARGET_RESOLUTION = (144, 256)
-MASK_RGB_DIFF_THRESHOLD = 75
 SKIP_SECS = 5
-SEEK_SECS = 0.5
-VS_AUDIO_FRAME_THRESHOLD = 0.001
-HISTOGRAM_DIFF_THRESHOLD = 0.7
-CHAR_HISTOGRAM_DIFF_DELTA_THRESHOLD = 0.03
+SEEK_SECS = 0.25
 
-VS_BW_IMG = Image.open(
-    '{}/vs-bw.png'.format(DATA_DIRPATH),
-).convert('1')
-VS_HISTOGRAM = Image.open(
-    '{}/vs.png'.format(DATA_DIRPATH),
-).convert('RGB').histogram(mask=VS_BW_IMG)
-CHAR_LEFT_BW_IMG = Image.open(
-    '{}/char-left-bw.png'.format(DATA_DIRPATH),
-).convert('1')
-CHAR_RIGHT_BW_IMG = Image.open(
-    '{}/char-right-bw.png'.format(DATA_DIRPATH),
-).convert('1')
 
-class Mask(object):
-    def __init__(self, filepath):
-        self.filepath = filepath
-        self.img_data = list(
-            Image.open(
-                '{}/masks/{}'.format(DATA_DIRPATH, filepath),
-            ).convert('RGB').getdata(),
-        )
+def load_image(filename, with_alpha=True):
+    img = Image.open(
+        '{}/images/{}'.format(DATA_DIRPATH, filename),
+    )
+    return img if with_alpha else img.convert('RGB')
 
-TRAINING_MASKS = [
-    Mask('time-limit-left.png'),
-    Mask('time-limit-right.png'),
+def load_image_mask(filename):
+    return Image.open(
+        '{}/masks/{}'.format(DATA_DIRPATH, filename),
+    ).convert('1')
+
+def load_char_images(dirname, side):
+    filename_suffix = '{}.png'.format(side)
+    box = CHAR_LEFT_IMAGE_BOX if side == '-left' else CHAR_RIGHT_IMAGE_BOX
+    char_images = {}
+    for filename in os.listdir('{}/{}'.format(DATA_DIRPATH, dirname)):
+        if filename.endswith(filename_suffix):
+            char_name = os.path.splitext(filename)[0]
+            img = Image.open(
+                '{}/{}/{}'.format(DATA_DIRPATH, dirname, filename)
+            ).convert('RGB')
+            char_images[char_name] = img.crop(box=box)
+    return char_images
+
+
+VS_IMAGE_BOX = [102, 39, 102+52, 39+51]
+VS_IMAGE_V_BOX = [107, 40, 107+17, 40+38]
+VS_IMAGE_S_BOX = [128, 52, 128+20, 52+36]
+VS_IMAGE = load_image('vs.png', with_alpha=False)
+VS_IMAGE_HASH = imagehash.average_hash(VS_IMAGE.crop(VS_IMAGE_BOX))
+VS_IMAGE_V_HASH = imagehash.average_hash(VS_IMAGE.crop(VS_IMAGE_V_BOX))
+VS_IMAGE_S_HASH = imagehash.average_hash(VS_IMAGE.crop(VS_IMAGE_S_BOX))
+VS_IMAGE_HASH_THRESHOLD = 20
+VS_INTERRUPTED_SECS_DIFF_THRESHOLD = 34/30  # 34 frames @30fps
+VS_IMAGE_MASK = load_image_mask('vs.png')
+VS_IMAGE_HISTOGRAM = VS_IMAGE.histogram(mask=VS_IMAGE_MASK)
+VS_IMAGE_HISTOGRAM_DIFF_THRESHOLD = 0.3
+
+VARIOUS_MODE_IMAGES = [
+    load_image('demo-banner.png'),
+    load_image('time-limit-left.png'),
+    load_image('time-limit-right.png'),
+    load_image('insert-coins-left.png'),
+    load_image('insert-coins-right.png'),
+    load_image('episode-mode-left.png'),
+    load_image('episode-mode-right.png'),
+    load_image('stage-left.png'),
+    load_image('stage-right.png'),
 ]
+VARIOUS_MODE_IMAGE_RGB_DIFF_THRESHOLD = 50
 
-MOM_MODE_MASKS = [
-    Mask('mom-display-left.png'),
-    Mask('mom-display-right.png'),
+MOM_MODE_IMAGES = [
+    load_image('mom-display-left.png'),
+    load_image('mom-display-right.png'),
 ]
+MOM_MODE_IMAGE_RGB_DIFF_THRESHOLD = 75
 
-CHAR_LEFT_HISTOGRAMS = {}
-CHAR_RIGHT_HISTOGRAMS = {}
-CHAR_LEFT_IMAGES = {}
-CHAR_RIGHT_IMAGES = {}
-for filepath in os.listdir('{}/chars'.format(DATA_DIRPATH)):
-    char_name = os.path.splitext(filepath)[0]
-    if filepath.endswith('.json'):
-        with open('{}/chars/{}'.format(DATA_DIRPATH, filepath), 'r') as f:
-            histogram = json.load(f)
-            if char_name.endswith('-left'):
-                CHAR_LEFT_HISTOGRAMS[char_name] = histogram
-            else:
-                CHAR_RIGHT_HISTOGRAMS[char_name] = histogram
-    elif filepath.endswith('.png'):
-        img = Image.open('{}/chars/{}'.format(DATA_DIRPATH, filepath))
-        if char_name.endswith('-left'):
-            CHAR_LEFT_IMAGES[char_name] = img
-        else:
-            CHAR_RIGHT_IMAGES[char_name] = img
+CHAR_LEFT_IMAGE_BOX = [7, 24, 7+91, 24+40]
+CHAR_RIGHT_IMAGE_BOX = [156, 24, 156+91, 24+40]
+CHAR_LEFT_IMAGES = load_char_images('char-images', '-left')
+CHAR_RIGHT_IMAGES = load_char_images('char-images', '-right')
+CHAR_LEFT_EARLY_IMAGES = load_char_images('char-images-early', '-left')
+CHAR_RIGHT_EARLY_IMAGES = load_char_images('char-images-early', '-right')
+CHAR_IMAGE_HASH_FUNCTIONS = [
+    imagehash.average_hash,
+    imagehash.phash,
+    imagehash.dhash,
+    imagehash.whash,
+]
+CHAR_IMAGE_HASH_THRESHOLD = 80
+
+MAX_ALPHA = 255
+image_with_alpha_pixel_count_cache = {}
 
 
-def flatten(xs):
-    return list(itertools.chain(*xs))
+def clip_frame_to_image(clip_frame):
+    return Image.fromarray(clip_frame.astype('uint8'), 'RGB')
+
+def compare_rgb(img_with_alpha, img):
+    img_composite = Image.alpha_composite(img.convert('RGBA'), img_with_alpha).convert('RGB')
+    img_diff = ImageChops.difference(img_composite, img)
+    total = sum(ImageStat.Stat(img_diff).sum)
+    try:
+        count = image_with_alpha_pixel_count_cache[img_with_alpha.filename]
+    except Exception:
+        count = ImageStat.Stat(img_with_alpha.getchannel('A').getdata()).sum[0] / MAX_ALPHA
+        image_with_alpha_pixel_count_cache[img_with_alpha.filename] = count
+    return total / count
 
 def histogram_diff(hist1, hist2):
     return sum(min(v1, v2) for v1, v2 in zip(hist1, hist2)) / sum(hist2)
 
-def compare_rgb(mask_rgb, vid_rgb):
-    total_rgb_diff = 0
-    count = 0
-
-    for i, (img_r, img_g, img_b) in enumerate(mask_rgb):
-        if img_r == 255 and img_g == 255 and img_b == 255:
-            continue
-
-        vid_r = vid_rgb[i * 3]
-        vid_g = vid_rgb[i * 3 + 1]
-        vid_b = vid_rgb[i * 3 + 2]
-
-        diff = abs(img_r - vid_r) + abs(img_g - vid_g) + abs(img_b - vid_b)
-        total_rgb_diff += diff
-        count += 1
-
-    return total_rgb_diff / count
-
-def format_timestamp(secs):
+def format_timestamp(sec):
     return '[{}]'.format(
-        str(datetime.timedelta(seconds=int(sec))),
+        datetime.timedelta(seconds=int(sec)),
     )
 
-def remove_audiovideo_file(audiovid_filepath):
-    if not os.path.exists(audiovid_filepath):
-        return
-
-    try:
-        os.remove(audiovid_filepath)
-    except Exception as e:
-        print('error removing {}'.format(audiovid_filepath), e)
-        sys.exit(1)
-
-def format_title(char_left, char_right):
-    left_filepath = char_left
-    right_filepath = char_right
-
+def format_title(char_left_key, char_right_key):
     char_name = lambda s: os.path.basename(s).split('-')[0]
     return '{} vs {}'.format(
-        char_name(left_filepath),
-        char_name(right_filepath),
+        char_name(char_left_key),
+        char_name(char_right_key),
     )
 
 def get_video_id(url):
@@ -137,6 +139,19 @@ def get_video_id(url):
         if m:
             return m.group('id')
     return ''
+
+def remove_video_file(vid_filepath):
+    if not os.path.exists(vid_filepath):
+        return
+
+    try:
+        os.remove(vid_filepath)
+    except Exception as e:
+        print('error removing {}'.format(vid_filepath), e)
+        sys.exit(1)
+
+def flatten(xs):
+    return list(itertools.chain(*xs))
 
 
 if __name__ == '__main__':
@@ -178,7 +193,7 @@ if __name__ == '__main__':
     # Download youtube video
     ###########################################################################
     if not args.already_downloaded:
-        remove_audiovideo_file(args.tmp_filepath)
+        remove_video_file(args.tmp_filepath)
         subprocess.check_call(
             'youtube-dl --format worstvideo --no-continue --output {} '
             '"{}"'.format(
@@ -188,118 +203,170 @@ if __name__ == '__main__':
             shell=True,
         )
 
-    # Download youtube audio
-    ###########################################################################
-    if not args.already_downloaded:
-        audio_filepath = args.tmp_filepath + AUDIO_FILEPATH_SUFFIX
-        remove_audiovideo_file(audio_filepath)
-        subprocess.check_call(
-            'youtube-dl --format worstaudio --no-continue --output {} '
-            '"{}"'.format(
-                audio_filepath,
-                args.youtube_url,
-            ),
-            shell=True,
+    clip = VideoFileClip(
+        args.tmp_filepath,
+        audio=False,
+    )
+    clip_frame0 = clip.get_frame(0)
+    clip_resolution = (len(clip_frame0), len(clip_frame0[0]))
+    if clip_resolution != TARGET_RESOLUTION:
+        clip.reader.close()
+        clip = VideoFileClip(
+            args.tmp_filepath,
+            audio=False,
+            target_resolution=TARGET_RESOLUTION,
+            resize_algorithm='fast_bilinear',
         )
 
 
     # Find match start timestamps
     ###########################################################################
-    clip = VideoFileClip(
-        args.tmp_filepath,
-        audio=False,
-        target_resolution=TARGET_RESOLUTION,
-        resize_algorithm='fast_bilinear',
-    )
-
+    sec_clip_frames_buffer = collections.deque()
+    vs_sec_clip_frames = []
     sec_matches = []
     match_titles = []
     next_sec = 0
 
-    with AudioFileClip(args.tmp_filepath + AUDIO_FILEPATH_SUFFIX) as audio_clip:
-        for sec, clip_frame in clip.iter_frames(with_times=True):
-            if sec < next_sec:
+    for sec, clip_frame in clip.iter_frames(with_times=True):
+        while sec_clip_frames_buffer:
+            (buffer_sec, _) = sec_clip_frames_buffer[0]
+            if sec - buffer_sec > CLIP_FRAME_BUFFER_MAX_SECS:
+                sec_clip_frames_buffer.popleft()
+            else:
+                break
+        sec_clip_frames_buffer.append((sec, clip_frame))
+
+        if sec < next_sec:
+            continue
+
+        clip_frame_img = clip_frame_to_image(clip_frame)
+
+        # Detect VS splash screen start/continuing
+        vs_img_hash_diff = imagehash.average_hash(clip_frame_img.crop(box=VS_IMAGE_BOX)) - VS_IMAGE_HASH
+        is_vs_sec_clip_frame_start = (
+            not vs_sec_clip_frames and
+            vs_img_hash_diff < VS_IMAGE_HASH_THRESHOLD and
+            imagehash.average_hash(clip_frame_img.crop(box=VS_IMAGE_V_BOX)) - VS_IMAGE_V_HASH < VS_IMAGE_HASH_THRESHOLD and
+            imagehash.average_hash(clip_frame_img.crop(box=VS_IMAGE_S_BOX)) - VS_IMAGE_S_HASH < VS_IMAGE_HASH_THRESHOLD
+        )
+        set_vs_sec_clip_frame = False
+        if is_vs_sec_clip_frame_start or (
+            vs_sec_clip_frames and
+            vs_img_hash_diff < VS_IMAGE_HASH_THRESHOLD and
+            histogram_diff(clip_frame_img.histogram(mask=VS_IMAGE_MASK), VS_IMAGE_HISTOGRAM) > VS_IMAGE_HISTOGRAM_DIFF_THRESHOLD
+        ):
+            vs_sec_clip_frames.append((sec, clip_frame))
+            set_vs_sec_clip_frame = True
+
+        # Process VS splash screen
+        if vs_sec_clip_frames and not set_vs_sec_clip_frame:
+            # Ignore various 1-player modes
+            is_1p_mode = False
+            for prev_sec, prev_clip_frame in sec_clip_frames_buffer:
+                prev_clip_frame_img = clip_frame_to_image(prev_clip_frame)
+                for img in VARIOUS_MODE_IMAGES:
+                    img_diff = compare_rgb(img, prev_clip_frame_img)
+                    if img_diff < VARIOUS_MODE_IMAGE_RGB_DIFF_THRESHOLD:
+                        if PRINT_REJECTED_MATCHES:
+                            print('{}\t\t\tREJECT ({}) | <{}>'.format(
+                                format_timestamp(prev_sec),
+                                os.path.splitext(os.path.basename(img.filename))[0],
+                                img_diff,
+                            ))
+                        is_1p_mode = True
+                        break
+                if is_1p_mode:
+                    break
+            if is_1p_mode:
+                vs_sec_clip_frames = []
+                next_sec = sec + SKIP_SECS
                 continue
 
-            clip_frame_img = Image.fromarray(clip_frame.astype('uint8'), 'RGB')
-            clip_frame_vs_histogram = clip_frame_img.histogram(mask=VS_BW_IMG)
+            (vs_sec, vs_clip_frame) = vs_sec_clip_frames[-1]
+            (early_vs_sec, early_vs_clip_frame) = vs_sec_clip_frames[0]
+            vs_sec_clip_frames = []
+            vs_clip_frame_img = clip_frame_to_image(vs_clip_frame)
 
-            if histogram_diff(clip_frame_vs_histogram, VS_HISTOGRAM) >= HISTOGRAM_DIFF_THRESHOLD:
-                is_demo_mode = all(
-                    abs(x) < VS_AUDIO_FRAME_THRESHOLD
-                    for x in audio_clip.get_frame(sec)
-                )
+            # Ignore M.O.M. matches
+            if any(
+                compare_rgb(img, vs_clip_frame_img) < MOM_MODE_IMAGE_RGB_DIFF_THRESHOLD
+                for img in MOM_MODE_IMAGES
+            ):
+                if PRINT_REJECTED_MATCHES:
+                    print('{}\t\t\tREJECT (M.O.M. mode)'.format(
+                        format_timestamp(vs_sec),
+                    ))
+                next_sec = vs_sec + SKIP_SECS
+                continue
 
-                clip_frame_rgb = clip_frame.flatten()
-                is_training_mode = any(
-                    compare_rgb(mask.img_data, clip_frame_rgb) < MASK_RGB_DIFF_THRESHOLD
-                    for mask in TRAINING_MASKS
-                )
 
-                is_mom_mode = any(
-                    compare_rgb(mask.img_data, clip_frame_rgb) < MASK_RGB_DIFF_THRESHOLD
-                    for mask in MOM_MODE_MASKS
-                )
+            # Figure out match characters
+            ###############################################################
+            def determine_side_char(char_side_imgs, char_side_img_box, char_clip_frame_img):
+                hash_diffs = collections.defaultdict(int)
+                char_clip_frame_img_cropped = char_clip_frame_img.crop(box=char_side_img_box)
 
-                if is_demo_mode or is_training_mode or is_mom_mode:
-                    next_sec = sec + SKIP_SECS
-                    continue
+                for imagehash_fn in CHAR_IMAGE_HASH_FUNCTIONS:
+                    char_clip_frame_img_hash = imagehash_fn(char_clip_frame_img_cropped)
+                    for char_key, char_side_img in char_side_imgs.items():
+                        hash_diff = char_clip_frame_img_hash - imagehash_fn(char_side_img)
+                        hash_diffs[char_key] += hash_diff
 
-                # Figure out match characters
-                ###############################################################
-                char_left_histogram = clip_frame_img.histogram(mask=CHAR_LEFT_BW_IMG)
-                char_right_histogram = clip_frame_img.histogram(mask=CHAR_RIGHT_BW_IMG)
+                return sorted(
+                    (
+                        (char_key, hash_diff)
+                        for char_key, hash_diff
+                        in hash_diffs.items()
+                    ),
+                    key=lambda kv: kv[1],
+                )[0]
 
-                char_left_histogram_diffs = [
-                    (histogram_diff(char_left_histogram, histogram), char_name)
-                    for char_name, histogram in CHAR_LEFT_HISTOGRAMS.items()
-                ]
-                char_right_histogram_diffs = [
-                    (histogram_diff(char_right_histogram, histogram), char_name)
-                    for char_name, histogram in CHAR_RIGHT_HISTOGRAMS.items()
-                ]
-
-                sorted_left_histogram_diffs = sorted(char_left_histogram_diffs, key=lambda hd: hd[0], reverse=True)
-                sorted_right_histogram_diffs = sorted(char_right_histogram_diffs, key=lambda hd: hd[0], reverse=True)
-
-                if sorted_left_histogram_diffs[0][0] < HISTOGRAM_DIFF_THRESHOLD or sorted_right_histogram_diffs[0][0] < HISTOGRAM_DIFF_THRESHOLD:
-                    continue
-
-                def rgb_fallback_char_match(char_side_bw_img, char_side_images):
-                    side_img = char_side_bw_img.convert('RGB')
-                    side_img.paste(clip_frame_img, mask=char_side_bw_img)
-                    rgb_diffs = [
-                        (
-                            compare_rgb(
-                                list(side_img.getdata()),
-                                flatten(list(char_img.getdata())),
-                            ),
-                            char_name,
-                        )
-                        for char_name, char_img
-                        in char_side_images.items()
-                    ]
-                    sorted_rgb_diffs = sorted(rgb_diffs, key=lambda rd: rd[0])
-                    return sorted_rgb_diffs[0][1]
-
-                left_char = sorted_left_histogram_diffs[0][1]
-                right_char = sorted_right_histogram_diffs[0][1]
-                left_hist_diff_delta = sorted_left_histogram_diffs[0][0] - sorted_left_histogram_diffs[1][0]
-                right_hist_diff_delta = sorted_right_histogram_diffs[0][0] - sorted_right_histogram_diffs[1][0]
-
-                if left_hist_diff_delta <= CHAR_HISTOGRAM_DIFF_DELTA_THRESHOLD:
-                    left_char = rgb_fallback_char_match(CHAR_LEFT_BW_IMG, CHAR_LEFT_IMAGES)
-                if right_hist_diff_delta <= CHAR_HISTOGRAM_DIFF_DELTA_THRESHOLD:
-                    right_char = rgb_fallback_char_match(CHAR_RIGHT_BW_IMG, CHAR_RIGHT_IMAGES)
-
-                sec_matches.append(int(sec))
-                title = format_title(left_char, right_char)
-                match_titles.append(title)
-                print(format_timestamp(sec), title)
-
-                next_sec = sec + SKIP_SECS
+            if vs_sec - early_vs_sec >= VS_INTERRUPTED_SECS_DIFF_THRESHOLD:
+                char_left_imgs = CHAR_LEFT_IMAGES
+                char_right_imgs = CHAR_RIGHT_IMAGES
+                char_clip_frame_img = vs_clip_frame_img
+                reject_print_reason_suffix = ''
             else:
-                next_sec = sec + SEEK_SECS
+                char_left_imgs = CHAR_LEFT_EARLY_IMAGES
+                char_right_imgs = CHAR_RIGHT_EARLY_IMAGES
+                char_clip_frame_img = clip_frame_to_image(early_vs_clip_frame)
+                reject_print_reason_suffix = '-early'
+                #print('{}\t\t\t***EARLY*** <{}>'.format(format_timestamp(early_vs_sec), vs_sec - early_vs_sec))
+
+            is_above_char_threshold = False
+            char_keys = []
+            for char_side_imgs, char_side_img_box in [
+                (char_left_imgs, CHAR_LEFT_IMAGE_BOX),
+                (char_right_imgs, CHAR_RIGHT_IMAGE_BOX),
+            ]:
+                char_key, hash_diff = determine_side_char(
+                    char_side_imgs,
+                    char_side_img_box,
+                    char_clip_frame_img,
+                )
+                if hash_diff < CHAR_IMAGE_HASH_THRESHOLD:
+                    char_keys.append(char_key)
+                else:
+                    if PRINT_REJECTED_MATCHES:
+                        print('{}\t\t\tREJECT (char threshold{}) | <{}, {}>'.format(
+                            format_timestamp(vs_sec),
+                            reject_print_reason_suffix,
+                            char_key,
+                            hash_diff,
+                        ))
+                    is_above_char_threshold = True
+                    break
+            if is_above_char_threshold:
+                continue
+
+            sec_matches.append(early_vs_sec)
+            title = format_title(*char_keys)
+            match_titles.append(title)
+            next_sec = vs_sec + SKIP_SECS
+            print(format_timestamp(early_vs_sec), title)
+        elif not vs_sec_clip_frames:
+            next_sec = sec + SEEK_SECS
+
     clip.reader.close()
 
 
@@ -310,26 +377,17 @@ if __name__ == '__main__':
     stripped_url = re.sub(r'#t=\d+', '', stripped_url)
 
     with open(args.output_filepath, 'w') as f:
-        f.write(
-            '<iframe width="480" height="360" '
-            'src="https://www.youtube.com/embed/{}" frameborder="0" '
-            'allow="autoplay; encrypted-media" allowfullscreen>'
-            '</iframe><br>\n'.format(
-                get_video_id(args.youtube_url),
-            ),
-        )
-
-        for sec, title in zip(sec_matches, match_titles):
+        f.write('<ol reversed>')
+        for sec, title in zip(sec_matches[::-1], match_titles[::-1]):
             f.write(
-                '<a href={}#t={}>{} {}</a><br>\n'.format(
+                '<li><a href={}#t={}>{} {}</a></li>\n'.format(
                     stripped_url,
                     sec,
                     format_timestamp(sec),
                     title,
                 ),
             )
-        f.write('<br><hr><br>\n')
+        f.write('</ol><br><hr>\n')
 
     if not args.keep_tmp_video and not args.already_downloaded:
-        remove_audiovideo_file(args.tmp_filepath)
-        remove_audiovideo_file(args.tmp_filepath + AUDIO_FILEPATH_SUFFIX)
+        remove_video_file(args.tmp_filepath)
