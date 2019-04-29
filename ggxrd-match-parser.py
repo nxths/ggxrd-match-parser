@@ -150,8 +150,12 @@ def remove_video_file(vid_filepath):
         print('error removing {}'.format(vid_filepath), e)
         sys.exit(1)
 
-def flatten(xs):
-    return list(itertools.chain(*xs))
+def print_reject(sec, message):
+    if PRINT_REJECTED_MATCHES:
+        print('{}\t\t\tREJECT {}'.format(
+            format_timestamp(sec),
+            message,
+        ))
 
 
 if __name__ == '__main__':
@@ -195,8 +199,7 @@ if __name__ == '__main__':
     if not args.already_downloaded:
         remove_video_file(args.tmp_filepath)
         subprocess.check_call(
-            'youtube-dl --format worstvideo --no-continue --output {} '
-            '"{}"'.format(
+            'youtube-dl --format worstvideo --no-continue --output "{}" "{}"'.format(
                 args.tmp_filepath,
                 args.youtube_url,
             ),
@@ -267,12 +270,10 @@ if __name__ == '__main__':
                 for img in VARIOUS_MODE_IMAGES:
                     img_diff = compare_rgb(img, prev_clip_frame_img)
                     if img_diff < VARIOUS_MODE_IMAGE_RGB_DIFF_THRESHOLD:
-                        if PRINT_REJECTED_MATCHES:
-                            print('{}\t\t\tREJECT ({}) | <{}>'.format(
-                                format_timestamp(prev_sec),
-                                os.path.splitext(os.path.basename(img.filename))[0],
-                                img_diff,
-                            ))
+                        print_reject(
+                            prev_sec,
+                            '({}) | <{}>'.format(os.path.splitext(os.path.basename(img.filename))[0], img_diff),
+                        )
                         is_1p_mode = True
                         break
                 if is_1p_mode:
@@ -292,10 +293,7 @@ if __name__ == '__main__':
                 compare_rgb(img, vs_clip_frame_img) < MOM_MODE_IMAGE_RGB_DIFF_THRESHOLD
                 for img in MOM_MODE_IMAGES
             ):
-                if PRINT_REJECTED_MATCHES:
-                    print('{}\t\t\tREJECT (M.O.M. mode)'.format(
-                        format_timestamp(vs_sec),
-                    ))
+                print_reject(vs_sec, '(M.O.M. mode)')
                 next_sec = vs_sec + SKIP_SECS
                 continue
 
@@ -346,13 +344,10 @@ if __name__ == '__main__':
                 if hash_diff < CHAR_IMAGE_HASH_THRESHOLD:
                     char_keys.append(char_key)
                 else:
-                    if PRINT_REJECTED_MATCHES:
-                        print('{}\t\t\tREJECT (char threshold{}) | <{}, {}>'.format(
-                            format_timestamp(vs_sec),
-                            reject_print_reason_suffix,
-                            char_key,
-                            hash_diff,
-                        ))
+                    print_reject(
+                        vs_sec,
+                        '(char threshold{}) | <{}, {}>'.format(reject_print_reason_suffix, char_key, hash_diff),
+                    )
                     is_above_char_threshold = True
                     break
             if is_above_char_threshold:
