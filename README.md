@@ -1,4 +1,4 @@
-![Example output html screenshot](https://raw.githubusercontent.com/nxths/ggxrd-match-parser/master/screenshots/example.jpg)
+![Example output html screenshot](https://raw.githubusercontent.com/nxths/ggxrd-match-parser/9532188857f36eec9dd56241e2b4285efe6561a6/screenshots/example.jpg)
 
 # Overview
 This project is for parsing out matches from youtube videos for Guilty Gear Xrd. Specifically, this script will generate an html file containing match start times with character names. See example screenshot above, each match is a timestamped youtube video link. 1 player modes (e.g. training) will be detected and ignored.
