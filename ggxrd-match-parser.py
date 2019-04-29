@@ -331,7 +331,6 @@ if __name__ == '__main__':
                 char_right_imgs = CHAR_RIGHT_EARLY_IMAGES
                 char_clip_frame_img = clip_frame_to_image(early_vs_clip_frame)
                 reject_print_reason_suffix = '-early'
-                #print('{}\t\t\t***EARLY*** <{}>'.format(format_timestamp(early_vs_sec), vs_sec - early_vs_sec))
 
             is_above_char_threshold = False
             char_keys = []
@@ -382,7 +381,7 @@ if __name__ == '__main__':
             f.write(
                 '<li><a href={}#t={}>{} {}</a></li>\n'.format(
                     stripped_url,
-                    sec,
+                    int(sec),
                     format_timestamp(sec),
                     title,
                 ),

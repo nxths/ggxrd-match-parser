@@ -5,7 +5,7 @@ This project is for parsing out matches from youtube videos for Guilty Gear Xrd.
 
 * ``ggxrd-match-parser.py``: Script for downloading and parsing youtube videos, run with ``--help`` for more details.
 
-The source should be cross platform but have only been tested on linux and windows.
+The source should be cross platform but has only been tested on linux and windows.
 
 # Dependencies
 * [python 3.x](https://www.python.org/)
