@@ -24,6 +24,8 @@ CLIP_FRAME_BUFFER_MAX_SECS = 8
 TARGET_RESOLUTION = (144, 256)
 SKIP_SECS = 5
 SEEK_SECS = 0.25
+VS_SEEK_SECS = 1
+POST_VERIFY_WINDOW_SECS = 4
 
 
 def load_image(filename, with_alpha=True):
@@ -229,6 +231,20 @@ if __name__ == '__main__':
     sec_matches = []
     match_titles = []
     next_sec = 0
+    is_post_verify_window = False
+
+    def is_1p_mode():
+        for prev_sec, prev_clip_frame in sec_clip_frames_buffer:
+            prev_clip_frame_img = clip_frame_to_image(prev_clip_frame)
+            for img in VARIOUS_MODE_IMAGES:
+                img_diff = compare_rgb(img, prev_clip_frame_img)
+                if img_diff < VARIOUS_MODE_IMAGE_RGB_DIFF_THRESHOLD:
+                    print_reject(
+                        prev_sec,
+                        '({}) | <{}>'.format(os.path.splitext(os.path.basename(img.filename))[0], img_diff),
+                    )
+                    return True
+        return False
 
     for sec, clip_frame in clip.iter_frames(with_times=True):
         while sec_clip_frames_buffer:
@@ -240,6 +256,22 @@ if __name__ == '__main__':
         sec_clip_frames_buffer.append((sec, clip_frame))
 
         if sec < next_sec:
+            continue
+
+        if is_post_verify_window:
+            # Reject potential match if 1p mode detected right after
+            if is_1p_mode():
+                sec_matches.pop()
+                match_titles.pop()
+                next_sec = sec + SKIP_SECS
+                is_post_verify_window = False
+            # Finalize potential match if no 1p modes detected right after
+            elif sec >= sec_matches[-1] + POST_VERIFY_WINDOW_SECS:
+                is_post_verify_window = False
+                next_sec = sec + SKIP_SECS
+                print(format_timestamp(sec_matches[-1]), match_titles[-1])
+            else:
+                next_sec = sec + SEEK_SECS
             continue
 
         clip_frame_img = clip_frame_to_image(clip_frame)
@@ -264,21 +296,7 @@ if __name__ == '__main__':
         # Process VS splash screen
         if vs_sec_clip_frames and not set_vs_sec_clip_frame:
             # Ignore various 1-player modes
-            is_1p_mode = False
-            for prev_sec, prev_clip_frame in sec_clip_frames_buffer:
-                prev_clip_frame_img = clip_frame_to_image(prev_clip_frame)
-                for img in VARIOUS_MODE_IMAGES:
-                    img_diff = compare_rgb(img, prev_clip_frame_img)
-                    if img_diff < VARIOUS_MODE_IMAGE_RGB_DIFF_THRESHOLD:
-                        print_reject(
-                            prev_sec,
-                            '({}) | <{}>'.format(os.path.splitext(os.path.basename(img.filename))[0], img_diff),
-                        )
-                        is_1p_mode = True
-                        break
-                if is_1p_mode:
-                    break
-            if is_1p_mode:
+            if is_1p_mode():
                 vs_sec_clip_frames = []
                 next_sec = sec + SKIP_SECS
                 continue
@@ -356,8 +374,9 @@ if __name__ == '__main__':
             sec_matches.append(early_vs_sec)
             title = format_title(*char_keys)
             match_titles.append(title)
-            next_sec = vs_sec + SKIP_SECS
-            print(format_timestamp(early_vs_sec), title)
+            is_post_verify_window = True
+            next_sec = vs_sec + VS_SEEK_SECS
+
         elif not vs_sec_clip_frames:
             next_sec = sec + SEEK_SECS
 
